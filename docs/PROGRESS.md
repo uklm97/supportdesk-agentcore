@@ -246,7 +246,7 @@ Plain-language version of this section: docs/PHASE0-EXPLAINED.md
 - Cost estimate: about 2 to 5 USD for one deploy-test-destroy day, mostly Bedrock. Prices are from memory, not checked today. User has NOT yet approved a deploy.
 - Phase 6 prerequisites: user commits; alert email for `infra/inputs.json`; model access check; approval. Run `configure_agentcore.py --reset` before committing after a real configure run.
 
-## Working rules learned (user is cost-sensitive; chat 2 spent about 4 USD with little output)
+## Working rules learned
 - Do not re-verify facts already written in this file. Do not scaffold scratch projects to explore. Batch work, write files, then test.
 - LATEST WORKFLOW (user, end of Phase 3, overrides everything below about who runs commands): THE ASSISTANT RUNS THE COMMANDS ITSELF (through Git Bash) and shows the user the result. Still explain in one plain sentence what each command does before running it. The assistant must still NEVER deploy or run anything that creates, changes or deletes AWS resources without the user's explicit approval and a cost estimate first. The 4 lines below describe the OLDER "user runs commands" workflow and are SUPERSEDED:
 - OLD WORKFLOW (superseded): the assistant does NOT run shell commands.
@@ -254,7 +254,7 @@ Plain-language version of this section: docs/PHASE0-EXPLAINED.md
   so the user can copy and run it in Git Bash, (3) wait for the user to paste the output, then continue.
   File edits by the assistant are still fine. The user wants to learn what is happening. This stays in force until the user says otherwise.
 - Keep chats short: start a new chat after each phase or step.
-- COST LESSONS from Phase 3 (the user had spent about 14 USD in total by then):
+- COST LESSONS from Phase 3:
   - NEVER search or read inside `agentcore/cdk/cdk.out/`, `agentcore/cdk/node_modules/`, `.venv/`, `infra/cdk.out/` or `uv.lock`. They hold huge single-line files. Search only inside `app/`, `lambdas/`, `infra/supportdesk_infra/`, `scripts/`, `tests/`, `docs/`.
   - Read PROGRESS.md ONCE (use start_line/end_line if it is truncated). Do not re-read it. Do not run wide regex searches like `PK|SK`.
   - Keep each editor call under 6000 characters. Split big files up front (the editor rejects larger ones and the text then has to be sent twice).
@@ -263,9 +263,9 @@ Plain-language version of this section: docs/PHASE0-EXPLAINED.md
   - The cost the user is talking about is the CLAUDE API cost of the chats (not AWS). Biggest levers: one phase per chat, no searches in generated folders, no repeated file reads, short command output.
 
 ## USER DECISIONS after Phase 5 (2026-10-27)
-- WAF stays OFF (`enable_waf` false). The user does not want to spend anything extra: this is a learning project.
+- WAF stays OFF (enable_waf false) to keep costs down.
 - The "100 chat turns" in the cost estimate was only a sizing assumption. Test with about 10 to 20 turns (about 0.15 to 0.30 USD of model calls).
-- The user has already spent about 20 USD on chat costs: keep Phase 6 chats short, no re-reading files, tiny command output, deploy one stack at a time.
+- Keep Phase 6 chats short: no re-reading files, tiny command output, deploy one stack at a time.
 
 ## New-chat starter prompt (PHASE 6 version, use this one)
 "Read C:\Users\AI_Dev\projects\agentcore-projects\supportdesk\docs\PROGRESS.md once (it is long: read the State section and the Phase 5 progress section first, then only what you need) and continue with Phase 6 (deploy, test, destroy).
@@ -291,3 +291,12 @@ Pause after the phase to explain. Do not deploy anything without my approval and
 "Read C:\Users\AI_Dev\projects\agentcore-projects\supportdesk\docs\PROGRESS.md and continue with the next unfinished phase.
 Use Git Bash for commands, explain what each command does before running it, pause after the phase to explain,
 and do not deploy without my approval."
+
+## Phase 6 progress (2026-10-27, in progress)
+- Deployed in order and OK: `supportdesk-auth`, `agentcore deploy` (stack AgentCore-supportdesk-default), `supportdesk-app`, seed script, web upload (`write_web_config.py`, `npm run build`, `deploy_web.py`).
+- Site: <SITE_URL> . Demo users alice, bob, staff (@example.com). The password was printed once by seed.py.
+- Fix for local scripts: `uv add "botocore[crt]"` (the `aws login` credentials need it). This changed pyproject.toml and uv.lock.
+- `uv run pytest -q`: 91 passed, 1 failed (`test_reset_puts_the_placeholders_back`). Expected while real ids are in agentcore.json. Run `configure_agentcore.py --reset` before committing.
+- Live test with alice: all 4 orders, statuses, dates and totals matched seed_data.py.
+- Rules 8 and 9 (order dates, no shipping promises) were added to app/supportdesk/prompts.py and deployed. Further notes are kept locally.
+

@@ -1,108 +1,80 @@
-# AgentCore Project
+# SupportDesk: a customer-support AI agent on Amazon Bedrock AgentCore
 
-This project was created with the [AgentCore CLI](https://github.com/aws/agentcore-cli).
+SupportDesk is a complete customer-support agent built on
+[Amazon Bedrock AgentCore](https://aws.amazon.com/bedrock/agentcore/). A signed-in customer chats with the agent
+to look at their orders, cancel an order that has not shipped, or open a support ticket.
 
-## Project Structure
+The focus is the surrounding platform, not just the model: identity, authorization, memory, tools, evaluation,
+cost control and clean teardown.
+
+## What it does
+
+- **Chat web app**: React + TypeScript + Vite, served from S3 behind CloudFront, with Cognito login.
+- **Agent**: a [Strands Agents](https://strandsagents.com/) agent running on AgentCore Runtime, using Claude Haiku 4.5 on Bedrock.
+- **Tools through a Gateway**: order lookup, order cancel and ticket creation are exposed over MCP by an AgentCore Gateway
+  and run in a Lambda function backed by a single DynamoDB table.
+- **Safety by design**:
+  - The customer id comes from the signed JWT, never from the chat text.
+  - A **Cedar policy** on the Gateway allows a tool call only when it is for the caller's own orders.
+  - The agent must ask for confirmation before it cancels anything.
+- **Memory**: AgentCore Memory keeps the conversation context across turns.
+- **Evaluation**: custom evaluators (reply accuracy, cancel confirmation) and an online evaluation config, created paused to avoid judge-call cost.
+- **Cost guard rails**: pay-per-request DynamoDB, CloudFront price class 100, API throttling, 7-day log retention, a monthly budget alert, WAF off by default.
+
+## Architecture
 
 ```
-my-project/
-├── AGENTS.md               # AI coding assistant context
-├── agentcore/
-│   ├── agentcore.json      # Project config (agents, memories, credentials, gateways, evaluators)
-│   ├── aws-targets.json    # Deployment targets (account + region)
-│   ├── .env.local          # Secrets — API keys (gitignored)
-│   ├── .llm-context/       # TypeScript type definitions for AI assistants
-│   │   ├── agentcore.ts    # AgentCoreProjectSpec types
-│   │   └── aws-targets.ts  # Deployment target types
-│   └── cdk/                # CDK infrastructure (@aws/agentcore-cdk)
-├── app/                    # Agent application code
-└── evaluators/             # Custom evaluator code (if any)
+Browser (React) --login--> Cognito
+   |  Bearer token
+   v
+CloudFront + S3 (site)      API Gateway (HTTP API, JWT authorizer)
+                                  |  POST /chat
+                                  v
+                            Chat Lambda ---> AgentCore Runtime (Strands agent, Claude Haiku 4.5)
+                                                    |  \
+                                                    |   AgentCore Memory
+                                                    v
+                                            AgentCore Gateway (MCP + Cedar policy)
+                                                    |
+                                                    v
+                                           Orders Lambda --> DynamoDB
 ```
 
-## Getting Started
+## Repository layout
 
-### Prerequisites
+| Path | What is in it |
+|---|---|
+| `app/supportdesk/` | The agent: prompt, tools, gateway client, identity helpers, entry point |
+| `agentcore/` | AgentCore project config (`agentcore.json`) and the generated CDK app |
+| `lambdas/orders/`, `lambdas/chat/` | Tool Lambda and the chat proxy Lambda |
+| `infra/` | Python CDK: `supportdesk-auth` (Cognito) and `supportdesk-app` (API, site, table, alarms, budget) |
+| `web/` | The front end |
+| `scripts/` | `configure_agentcore.py`, `seed.py`, `write_web_config.py`, `deploy_web.py`, `stack_outputs.py` |
+| `tests/` | About 90 pytest tests (agent logic, tools, infra templates, scripts) |
+| `docs/` | `PROGRESS.md` (full build log) and a plain-language `PHASEn-EXPLAINED.md` per phase |
 
-- **Node.js** 20.x or later
-- **Python 3.10+** and **uv** for Python agents ([install uv](https://docs.astral.sh/uv/getting-started/installation/))
-- **AWS credentials** configured (`aws configure` or environment variables)
-- **Docker** (only for Container build agents)
-
-### Development
-
-Run your agent locally:
+## Run the tests (no AWS needed)
 
 ```bash
-agentcore dev
+uv sync
+uv run pytest -q
 ```
 
-### Validate Invocation Input
+## Deploy (costs money; read first)
 
-Validate runtime invocation payloads before forwarding them to an agent framework. Keep user prompts typed as strings
-and pass only prompt text to the agent.
+Prerequisites: AWS credentials, CDK bootstrapped, [uv](https://docs.astral.sh/uv/), Node.js 20+, the AgentCore CLI and Bedrock model access.
+One deploy-test-destroy day cost roughly 2 to 5 USD in the estimate, mostly model calls. Deploy one stack at a time, in this order:
 
-### Deployment
+1. `cd infra && npx cdk deploy supportdesk-auth`
+2. `uv run python scripts/configure_agentcore.py --user-pool-id <id> --client-id <id> --alert-email <you@example.com>`
+3. `agentcore deploy`
+4. Re-run the configure script with `--runtime-arn <arn>`
+5. `cd infra && npx cdk deploy supportdesk-app`
+6. `uv run python scripts/seed.py` (demo users and orders; the password is printed once)
+7. `uv run python scripts/write_web_config.py`, then `cd web && npm run build`, then `uv run python scripts/deploy_web.py`
 
-Deploy to AWS:
+Destroy in reverse order. Run `configure_agentcore.py --reset` before committing so no account-specific ids land in git.
 
-```bash
-agentcore deploy
-```
+## License
 
-## Commands
-
-| Command | Description |
-| --- | --- |
-| `agentcore create` | Create a new AgentCore project |
-| `agentcore add` | Add resources (agent, memory, credential, gateway, evaluator, policy) |
-| `agentcore remove` | Remove resources |
-| `agentcore dev` | Run agent locally with hot-reload |
-| `agentcore deploy` | Deploy to AWS via CDK |
-| `agentcore status` | Show deployment status |
-| `agentcore invoke` | Invoke agent (local or deployed) |
-| `agentcore logs` | View agent logs |
-| `agentcore traces` | View agent traces |
-| `agentcore eval` | Run evaluations |
-| `agentcore package` | Package agent artifacts |
-| `agentcore validate` | Validate configuration |
-| `agentcore pause` | Pause a deployed agent |
-| `agentcore resume` | Resume a paused agent |
-| `agentcore fetch` | Fetch remote resource definitions |
-| `agentcore import` | Import existing resources |
-| `agentcore update` | Check for CLI updates |
-
-## Configuration
-
-Edit the JSON files in `agentcore/` to configure your project. See `agentcore/.llm-context/` for type definitions and validation constraints.
-
-The project uses a **flat resource model** — agents, memories, credentials, gateways, evaluators, and policies are top-level arrays in `agentcore.json`. Resources are independent; agents discover memories and credentials at runtime via environment variables or SDK calls.
-
-## Resources
-
-| Resource | Purpose |
-| --- | --- |
-| Agent (runtime) | HTTP, MCP, or A2A agent deployed to AgentCore Runtime |
-| Memory | Persistent context storage with configurable strategies |
-| Credential | API key or OAuth credential providers |
-| Gateway | MCP gateway that routes tool calls to targets |
-| Gateway Target | Tool implementation (Lambda, MCP server, OpenAPI, Smithy, API Gateway) |
-| Evaluator | Custom LLM-as-a-Judge or code-based evaluation |
-| Online Eval Config | Continuous evaluation pipeline for deployed agents |
-| Policy | Cedar authorization policies for gateway tools |
-
-### Agent Types
-
-- **Template agents**: Created from framework templates (Strands, LangChain/LangGraph, GoogleADK, OpenAI Agents, Autogen)
-- **BYO agents**: Bring your own code with `agentcore add agent --type byo`
-- **Import agents**: Import existing Bedrock agents with `agentcore import`
-
-### Build Types
-
-- **CodeZip**: Python source packaged as a zip and deployed directly to AgentCore Runtime
-- **Container**: Docker image built via CodeBuild (ARM64), pushed to ECR, and deployed to AgentCore Runtime
-
-## Documentation
-
-- [AgentCore CLI](https://github.com/aws/agentcore-cli)
-- [AgentCore CDK Constructs](https://github.com/aws/agentcore-l3-cdk-constructs)
-- [Amazon Bedrock AgentCore](https://aws.amazon.com/bedrock/agentcore/)
+No license has been chosen yet.

@@ -7,3 +7,5 @@ web/node_modules/
 web/dist/
 web/public/config.json
 *.pyc
+docs/LOCAL-NOTES.md
+
