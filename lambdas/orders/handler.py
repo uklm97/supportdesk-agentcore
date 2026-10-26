@@ -19,13 +19,17 @@ from orders_core import OrderError
 TOOL_NAME_KEY = "bedrockAgentCoreToolName"
 TARGET_SEPARATOR = "___"
 
+# The gateway Lambda is created from agentcore.json, which has no field for environment
+# variables, so the table name defaults to the fixed name the infra/ stack will create.
+DEFAULT_TABLE_NAME = "supportdesk-orders"
+
 _table: Any = None
 
 
 def _get_table() -> Any:
     global _table
     if _table is None:
-        _table = boto3.resource("dynamodb").Table(os.environ["ORDERS_TABLE"])
+        _table = boto3.resource("dynamodb").Table(os.environ.get("ORDERS_TABLE", DEFAULT_TABLE_NAME))
     return _table
 
 

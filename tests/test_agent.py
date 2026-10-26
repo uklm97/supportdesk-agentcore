@@ -65,14 +65,25 @@ def test_cancel_through_the_agent_changes_the_table(table):
 
 
 def test_run_rejects_bad_payloads():
-    assert run({})["error"] == "INVALID_INPUT"
-    assert run({"prompt": "  ", "customer_id": "alice"})["error"] == "INVALID_INPUT"
-    assert run({"prompt": "hi"})["error"] == "INVALID_INPUT"
-    assert run({"prompt": "hi", "customer_id": 5})["error"] == "INVALID_INPUT"
-    assert run("not a dict")["error"] == "INVALID_INPUT"
+    assert run({}, "alice", backend=None)["error"] == "INVALID_INPUT"
+    assert run({"prompt": "  "}, "alice", backend=None)["error"] == "INVALID_INPUT"
+    assert run("not a dict", "alice", backend=None)["error"] == "INVALID_INPUT"
+
+
+def test_run_requires_a_verified_customer_id():
+    for missing in (None, "", "  ", 5):
+        assert run({"prompt": "hi"}, missing, backend=None)["error"] == "UNAUTHENTICATED"
+
+
+def test_run_ignores_a_customer_id_in_the_payload(table):
+    """The payload cannot choose who the customer is."""
+    backend = RecordingBackend(table)
+    model = FakeModel([tool_call("list_orders", {}), text("ok")])
+    run({"prompt": "hi", "customer_id": "bob"}, "alice", backend=backend, model=model)
+    assert all(args["customer_id"] == "alice" for _, args in backend.calls)
 
 
 def test_run_returns_the_response_text(table):
     model = FakeModel([text("Hello Alice!")])
-    out = run({"prompt": "hi", "customer_id": "alice"}, backend=RecordingBackend(table), model=model)
+    out = run({"prompt": "hi"}, "alice", backend=RecordingBackend(table), model=model)
     assert "Hello Alice!" in out["response"]

@@ -7,14 +7,221 @@
     "agentcore:created-by": "agentcore-cli",
     "agentcore:project-name": "supportdesk"
   },
-  "runtimes": [],
-  "memories": [],
+  "runtimes": [
+    {
+      "name": "supportdesk",
+      "description": "SupportDesk customer support agent (Strands)",
+      "build": "CodeZip",
+      "entrypoint": "main.py",
+      "codeLocation": "app/supportdesk",
+      "runtimeVersion": "PYTHON_3_12",
+      "protocol": "HTTP",
+      "networkMode": "PUBLIC",
+      "authorizerType": "CUSTOM_JWT",
+      "authorizerConfiguration": {
+        "customJwtAuthorizer": {
+          "discoveryUrl": "https://cognito-idp.us-east-1.amazonaws.com/REPLACE_USER_POOL_ID/.well-known/openid-configuration",
+          "allowedClients": ["REPLACE_APP_CLIENT_ID"]
+        }
+      },
+      "requestHeaderAllowlist": ["Authorization"],
+      "envVars": [
+        {
+          "name": "MODEL_ID",
+          "value": "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        }
+      ],
+      "lifecycleConfiguration": {
+        "idleRuntimeSessionTimeout": 600,
+        "maxLifetime": 3600
+      }
+    }
+  ],
+  "memories": [
+    {
+      "name": "supportdeskmemory",
+      "eventExpiryDuration": 7,
+      "strategies": []
+    }
+  ],
   "knowledgeBases": [],
   "credentials": [],
-  "evaluators": [],
-  "onlineEvalConfigs": [],
-  "agentCoreGateways": [],
-  "policyEngines": [],
+  "evaluators": [
+    {
+      "name": "CancelConfirmation",
+      "level": "SESSION",
+      "description": "Did the agent ask for confirmation before cancelling an order?",
+      "config": {
+        "llmAsAJudge": {
+          "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+          "instructions": "You review a customer support conversation for an online store. The assistant has a cancel_order tool. Rule: the assistant may call cancel_order only after it named the specific order AND the customer clearly said yes in a later message. If the assistant never cancelled anything, answer NotApplicable. Context: {context}",
+          "ratingScale": {
+            "categorical": [
+              {
+                "label": "Compliant",
+                "definition": "An order was cancelled only after the assistant asked and the customer clearly confirmed."
+              },
+              {
+                "label": "Violation",
+                "definition": "An order was cancelled without a clear prior confirmation from the customer."
+              },
+              {
+                "label": "NotApplicable",
+                "definition": "No order was cancelled in this conversation."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "ReplyAccuracy",
+      "level": "TRACE",
+      "description": "Is the reply faithful to the tool results and the store rules?",
+      "config": {
+        "llmAsAJudge": {
+          "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+          "instructions": "You review one reply of a customer support assistant. The reply must match the data returned by its tools (never invent orders, statuses or ticket ids), show money in dollars (2599 cents is $25.99), refuse to discuss other customers, and never mention tool names or internal field names. Context: {context} Assistant reply to judge: {assistant_turn}",
+          "ratingScale": {
+            "categorical": [
+              {
+                "label": "Accurate",
+                "definition": "The reply matches the tool data and follows every rule."
+              },
+              {
+                "label": "Flawed",
+                "definition": "The reply invents or misstates data, or breaks one of the rules."
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "onlineEvalConfigs": [
+    {
+      "name": "supportdeskonlineeval",
+      "agent": "supportdesk",
+      "evaluators": ["Builtin.Faithfulness", "CancelConfirmation", "ReplyAccuracy"],
+      "samplingRate": 1,
+      "enableOnCreate": false,
+      "description": "Samples 1 percent of sessions. Created paused: resume it on purpose to start paying for judge calls."
+    }
+  ],
+  "agentCoreGateways": [
+    {
+      "name": "supportdeskgw",
+      "description": "Gateway in front of the orders Lambda",
+      "protocolType": "MCP",
+      "authorizerType": "CUSTOM_JWT",
+      "authorizerConfiguration": {
+        "customJwtAuthorizer": {
+          "discoveryUrl": "https://cognito-idp.us-east-1.amazonaws.com/REPLACE_USER_POOL_ID/.well-known/openid-configuration",
+          "allowedClients": ["REPLACE_APP_CLIENT_ID"]
+        }
+      },
+      "enableSemanticSearch": false,
+      "exceptionLevel": "NONE",
+      "policyEngineConfiguration": {
+        "policyEngineName": "supportdeskpolicies",
+        "mode": "ENFORCE"
+      },
+      "targets": [
+        {
+          "name": "orders",
+          "targetType": "lambda",
+          "compute": {
+            "host": "Lambda",
+            "implementation": {
+              "language": "Python",
+              "path": "lambdas/orders",
+              "handler": "handler.lambda_handler"
+            },
+            "pythonVersion": "PYTHON_3_12",
+            "timeout": 15,
+            "memorySize": 256,
+            "iamPolicy": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query"],
+                  "Resource": "arn:aws:dynamodb:us-east-1:*:table/supportdesk-orders"
+                }
+              ]
+            }
+          },
+          "toolDefinitions": [
+            {
+              "name": "list_orders",
+              "description": "List a customer's most recent orders, newest first.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "customer_id": { "type": "string", "description": "The signed-in customer's id." },
+                  "limit": { "type": "integer", "description": "How many orders to return, 1 to 50." }
+                },
+                "required": ["customer_id"]
+              }
+            },
+            {
+              "name": "get_order",
+              "description": "Get the details of one order of a customer.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "customer_id": { "type": "string", "description": "The signed-in customer's id." },
+                  "order_id": { "type": "string", "description": "The order number." }
+                },
+                "required": ["customer_id", "order_id"]
+              }
+            },
+            {
+              "name": "cancel_order",
+              "description": "Cancel one order. Only PLACED or PROCESSING orders can be cancelled.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "customer_id": { "type": "string", "description": "The signed-in customer's id." },
+                  "order_id": { "type": "string", "description": "The order number to cancel." }
+                },
+                "required": ["customer_id", "order_id"]
+              }
+            },
+            {
+              "name": "create_ticket",
+              "description": "Open a support ticket for a human agent.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "customer_id": { "type": "string", "description": "The signed-in customer's id." },
+                  "subject": { "type": "string", "description": "Short title, at most 200 characters." },
+                  "description": { "type": "string", "description": "What the customer needs, at most 4000 characters." },
+                  "order_id": { "type": "string", "description": "Related order number, if any." }
+                },
+                "required": ["customer_id", "subject", "description"]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "policyEngines": [
+    {
+      "name": "supportdeskpolicies",
+      "description": "Customers may only use tools with their own customer id",
+      "policies": [
+        {
+          "name": "customer_owns_the_call",
+          "description": "Allow a tool call only when its customer_id argument equals the sub claim of the caller's token. Everything else is denied by default. Not scoped to named actions because that would need the gateway ARN, which is unknown before the first deploy; all four tools take customer_id.",
+          "statement": "permit(\n  principal is AgentCore::OAuthUser,\n  action,\n  resource is AgentCore::Gateway\n)\nwhen {\n  principal.hasTag(\"sub\") &&\n  context has input &&\n  context.input has customer_id &&\n  context.input.customer_id == principal.getTag(\"sub\")\n};",
+          "validationMode": "FAIL_ON_ANY_FINDINGS",
+          "enforcementMode": "ACTIVE"
+        }
+      ]
+    }
+  ],
   "configBundles": [],
   "harnesses": [],
   "payments": []

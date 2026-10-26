@@ -36,7 +36,10 @@ It must be deployable, so we can deploy, test, destroy, and redeploy cleanly. It
 - DONE (Phase 1, step 1 of 2): DynamoDB single-table design and tool logic, local only, 13 passing tests (`uv run pytest -q`). See "Phase 1 progress" below.
 - Phase 1 step 1 is COMMITTED (commit d37e591).
 - DONE (Phase 1, step 2 of 2): Strands agent under `app/supportdesk/`, 26 passing tests total. COMMITTED (commit 6f77697, committed by the user). See "Phase 1 step 2 progress" below.
-- NOT STARTED: runtime registration in agentcore.json, policies, memory, gateway wiring, evaluators, `infra/`, front end, scripts.
+- DONE (Phase 2, local only): runtime, memory, gateway + Lambda target, Cedar policy, evaluators and online eval are written into agentcore.json; `main.py` now reads the customer from the JWT and calls the gateway.
+  User ran `uv run pytest -q`: 41 passed. User ran `agentcore build`: OK (schema accepted, including the REPLACE_* placeholders and `requestHeaderAllowlist`). See "Phase 2 progress" below.
+  Phase 2 is NOT yet committed (ask the user to commit). `agentcore build` only checks the schema locally: the Cedar policy, evaluators and everything else are still unvalidated by AWS until a deploy.
+- NOT STARTED: `infra/` (auth stack + app stack), front end, scripts.
 
 ## Schema facts (confirmed against the 0.31.1 .llm-context; RE-CHECK against 1.0.0 before relying on them)
 - Project name: letters and digits only, max 23 characters. Renaming a resource destroys and recreates it.
@@ -98,8 +101,12 @@ Plain-language version of this section: docs/PHASE0-EXPLAINED.md
    Either write the agent files by hand (preferred, no exploration needed) or scaffold a scratch project outside this repo and copy the pattern.
    `agentcore add runtime --help` was already read (1.0.0): flags include --name, --language, --protocol, --authorizer-type, --authorizer-configuration, --environment-variables, --additional-policies.
    Also create docs/PHASE1-EXPLAINED.md in plain language when the phase ends.
-3. Phase 2: Cedar policies, memory, gateway wiring, evaluators.
-4. Phase 3: `infra/` CDK app. Phase 4: React front end with Cognito login.
+3. Phase 2: DONE locally (tests and `agentcore build` pass). Real validation happens at deploy time (Phase 6).
+4. Phase 3 (NEXT): Python CDK. (a) `auth` stack: Cognito user pool + app client + test users, deployed first. (b) `infra/` app stack: DynamoDB table named exactly `supportdesk-orders`
+   (pay-per-request), API Gateway HTTP API + Lambda that calls the runtime with the user's JWT, S3 + CloudFront, alarms, budget, WAF behind an off-by-default flag.
+   (c) A Python script that reads the auth stack outputs and writes the discovery URL and client id into agentcore.json (runtime AND gateway), and a seed script that loads orders under `CUSTOMER#<sub>`.
+   No ImportValue (see "Stack outputs"). Local only: `cdk synth` and tests, no deploy.
+   Phase 4: React front end with Cognito login.
 5. Phase 5: lint, type checks, tests, `cdk synth`, cost estimate, user approval. Phase 6: deploy, test, destroy, redeploy.
 
 ## Phase 1 progress (step 1 done)
@@ -137,6 +144,44 @@ Plain-language version of this section: docs/PHASE0-EXPLAINED.md
 - Replace `payload["customer_id"]` in `main.py` with the verified JWT claim (runtime authorizer CUSTOM_JWT with the new Cognito pool). Never trust the payload in production.
 - Implement `gateway_backend` to call the AgentCore Gateway (MCP tools) and add the Cedar policy that compares the customer id with the token.
 - Decide whether to add session memory, and a guard that blocks `cancel_order` unless the customer confirmed.
+
+## Phase 2 progress (edits written; plain-language version: docs/PHASE2-EXPLAINED.md)
+### Decision made in Phase 2 (user accepted the recommendation)
+- Cognito goes in its OWN small CDK stack (`auth`), deployed FIRST, so the runtime and gateway can verify the real user JWT (CUSTOM_JWT).
+  Deploy order: auth stack -> `agentcore/` -> rest of `infra/`. Teardown in reverse. This replaces the single-`infra/` idea in "Decisions".
+  A Phase 3 Python script must write the pool's discovery URL and app client id into agentcore.json (runtime AND gateway authorizers).
+  Until then the JSON holds the placeholders `REPLACE_USER_POOL_ID` and `REPLACE_APP_CLIENT_ID`. Deploying with them will fail or be useless.
+
+### What was written
+- `agentcore.json`: runtime `supportdesk` (CodeZip, `app/supportdesk`, `main.py`, PYTHON_3_12, CUSTOM_JWT, idle timeout 600 s);
+  memory `supportdeskmemory` (7-day expiry, NO long-term strategies = short-term only, cheapest);
+  gateway `supportdeskgw` (MCP, CUSTOM_JWT, semantic search off, policy engine `supportdeskpolicies` in ENFORCE) with Lambda target `orders`
+  (path `lambdas/orders`, handler `handler.lambda_handler`, 4 tool definitions, IAM limited to the table `supportdesk-orders`);
+  policy engine `supportdeskpolicies` with one Cedar policy `customer_owns_the_call`;
+  evaluators `CancelConfirmation` (SESSION) and `ReplyAccuracy` (TRACE); online eval `supportdeskonlineeval` at samplingRate 1 (percent), `enableOnCreate: false`.
+- `app/supportdesk/identity.py` (reads `sub` from the Authorization header), `gateway.py` (MCP client, prefixes tool names with `orders___`),
+  `requirements.txt`; `main.py` rewritten (identity from JWT, gateway backend, optional memory session manager); `agent.py` takes `session_manager`.
+- `lambdas/orders/handler.py`: table name now defaults to `supportdesk-orders` (agentcore.json has no env var field for gateway Lambdas).
+- Tests: `tests/test_agent.py` updated for the new `run(payload, customer_id, backend, ...)` signature; new `tests/test_identity_gateway.py`.
+
+### Verified in Phase 2 from AWS docs (Cedar and evaluators)
+- Principal `AgentCore::OAuthUser`; JWT claims are tags (`principal.hasTag("sub")`, `principal.getTag("sub")`); tool arguments are `context.input.<name>`;
+  action ids are `<Target>___<tool>`; a policy that names specific actions needs the gateway ARN, a policy over ANY action uses `resource is AgentCore::Gateway`.
+  Because the gateway ARN is unknown before the first deploy, the policy covers any action on any gateway and relies on all four tools having `customer_id`.
+- Custom judge placeholders: SESSION `{context}`, `{available_tools}`; TRACE `{context}`, `{assistant_turn}`. `Builtin.Faithfulness` exists. `Builtin.GoalSuccessRate` is NOT used.
+- Memory env var format `MEMORY_<NAME>_ID` (uppercase). Local-dev gateway env vars are `AGENTCORE_GATEWAY_<NAME>_URL`.
+
+### UNVERIFIED / likely to need fixes at `agentcore build` or the first deploy
+- Cedar: `context has input` and `FAIL_ON_ANY_FINDINGS` may be rejected by the policy validator. If so, try without the `context has input` line or set `IGNORE_ALL_FINDINGS` temporarily.
+- Whether the deployed runtime receives `AGENTCORE_GATEWAY_SUPPORTDESKGW_URL` and `MEMORY_SUPPORTDESKMEMORY_ID` (docs only say so for local dev / "CDK-injected"). `main.py` also accepts `GATEWAY_URL`. Confirm after first deploy.
+- `requestHeaderAllowlist: ["Authorization"]` on the runtime: not confirmed that it is needed or accepted. If `agentcore build` rejects it, remove it and check how the runtime exposes the token.
+- `requirements.txt` vs pyproject for the CodeZip build, and whether `aws-opentelemetry-distro` belongs there (copied from memory of the starter template).
+- Judge model `us.anthropic.claude-haiku-4-5-20251001-v1:0` for the evaluators (docs example uses a Sonnet id). Model availability in this account is still unchecked.
+- Gateway passes tool args as the Lambda event and the tool name in client context (the Phase 1 assumption) is still unverified.
+- `gateway.py` uses Strands `MCPClient.call_tool_sync`; the import name of the streamable HTTP client differs between `mcp` versions (handled with a fallback). Untested against a real gateway.
+- Gateway Lambda target DynamoDB table `supportdesk-orders` does not exist until `infra/` creates it with exactly that name.
+- Customer ids are now Cognito `sub` values, not "alice". The seed script in Phase 3 must create order rows under `CUSTOMER#<sub>`.
+- The cancel-confirmation guard in code was NOT added (still only a prompt rule); the `CancelConfirmation` evaluator only measures it after the fact.
 
 ## Working rules learned (user is cost-sensitive; chat 2 spent about 4 USD with little output)
 - Do not re-verify facts already written in this file. Do not scaffold scratch projects to explore. Batch work, write files, then test.

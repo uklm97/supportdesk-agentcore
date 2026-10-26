@@ -27,11 +27,16 @@ def default_model() -> BedrockModel:
     )
 
 
-def build_agent(backend: Backend, customer_id: str, model: Any = None) -> Agent:
-    """One agent per request, bound to one signed-in customer."""
+def build_agent(backend: Backend, customer_id: str, model: Any = None, session_manager: Any = None) -> Agent:
+    """One agent per request, bound to one signed-in customer.
+
+    `session_manager` (optional) is the AgentCore Memory session manager. Without it
+    the agent has no memory between requests.
+    """
     return Agent(
         model=model if model is not None else default_model(),
         system_prompt=SYSTEM_PROMPT,
         tools=build_tools(backend, customer_id),
+        session_manager=session_manager,
         callback_handler=None,
     )
