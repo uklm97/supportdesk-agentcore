@@ -34,8 +34,9 @@ It must be deployable, so we can deploy, test, destroy, and redeploy cleanly. It
 - NOTHING is deployed to AWS. `agentcore/aws-targets.json` has no targets yet.
 - The Phase 0 migration changes are COMMITTED (commit 08245f6).
 - DONE (Phase 1, step 1 of 2): DynamoDB single-table design and tool logic, local only, 13 passing tests (`uv run pytest -q`). See "Phase 1 progress" below.
-- Phase 1 step 1 files are UNCOMMITTED unless `git log` shows a "Phase 1 step 1" commit. Run `git status` first.
-- NOT STARTED: Strands agent (`app/`), policies, memory, evaluators, `infra/`, front end, scripts.
+- Phase 1 step 1 is COMMITTED (commit d37e591).
+- DONE (Phase 1, step 2 of 2): Strands agent under `app/supportdesk/`, 26 passing tests total. NOT YET COMMITTED (user commits). See "Phase 1 step 2 progress" below.
+- NOT STARTED: runtime registration in agentcore.json, policies, memory, gateway wiring, evaluators, `infra/`, front end, scripts.
 
 ## Schema facts (confirmed against the 0.31.1 .llm-context; RE-CHECK against 1.0.0 before relying on them)
 - Project name: letters and digits only, max 23 characters. Renaming a resource destroys and recreates it.
@@ -89,7 +90,8 @@ Plain-language version of this section: docs/PHASE0-EXPLAINED.md
 
 ## Next steps
 1. Phase 0: DONE except the real-deploy checks above. Those will be folded into Phase 6 (deploy, test, destroy, redeploy) so we do not pay for a throwaway deploy.
-2. Phase 1 (IN PROGRESS, step 2 of 2 is NEXT): step 1 (DynamoDB design, tool logic, Lambda handler, tests) is done.
+2. Phase 1: DONE (both steps). The text below is the old plan, kept for reference. Next is Phase 2.
+   Old plan: step 1 (DynamoDB design, tool logic, Lambda handler, tests) is done.
    Remaining: the Strands agent under `app/` (system prompt, tools that call the order functions, unit tests with a mocked model),
    then update this file and write docs/PHASE1-EXPLAINED.md. All Python. Local only, no deploy.
    Agent code location: `agentcore add runtime` has no template option, and the Strands template exists only in `agentcore create --template agent-python-strands`.
@@ -114,9 +116,34 @@ Plain-language version of this section: docs/PHASE0-EXPLAINED.md
 - ASSUMPTION: the code trusts the `customer_id` argument. Phase 2 must add a Cedar policy comparing it to the logged-in user (JWT claim).
 - Known stale doc: `AGENTS.md` still mentions `agentcore validate` (does not exist in 1.0.0). Use `agentcore build`.
 
+## Phase 1 step 2 progress (done, plain-language version: docs/PHASE1-EXPLAINED.md)
+- Files in `app/supportdesk/`: `prompts.py` (system prompt), `tools.py` (`build_tools(backend, customer_id)`), `agent.py` (`build_agent`, `default_model`),
+  `main.py` (`BedrockAgentCoreApp` entrypoint plus testable `run()`). Tests: `tests/conftest.py` (shared `table` fixture, moved out of test_orders.py),
+  `tests/fake_model.py` (scripted fake Strands model), `tests/test_tools.py`, `tests/test_agent.py`.
+- Installed (uv.lock): strands-agents 1.62.0, bedrock-agentcore 1.25.0. `pyproject.toml` pytest `pythonpath` now includes `app/supportdesk`.
+- Design: the tools do NOT expose `customer_id` to the model. It is bound in a closure when the agent is built (one agent per request).
+  A test proves that a model passing `customer_id=bob` still acts as the signed-in customer.
+- Tools talk to a `backend(tool_name, args) -> dict`. In tests that is `handler.handle` over moto. In `main.py` the default `gateway_backend` raises NotImplementedError (Phase 2 wires the gateway).
+- The agent prompt makes the model ask for confirmation before cancelling. This is only a prompt rule, not enforced in code. Consider a code or policy guard later.
+- Model: Bedrock model id default `us.anthropic.claude-haiku-4-5-20251001-v1:0`, overridable with env var `MODEL_ID`. UNVERIFIED that it is available in this account. Check before Phase 6.
+- The fake model streams events by hand (messageStart, contentBlock*, messageStop). It works with strands 1.62.0.
+- Harmless warning in pytest: a Pydantic deprecation inside the bedrock_agentcore library. Ignore.
+- NOT TESTED against a real model or a real AgentCore runtime. `main.py` was only imported and its `run()` tested, never started with `app.run()`.
+
+### Phase 2 TODOs created by this step
+- Register the runtime: `agentcore add runtime` (flags: --name, --language, --protocol, --authorizer-type, ...). Set `entrypoint` to `main.py` and `codeLocation` to `app/supportdesk`.
+  The CodeZip build probably needs a requirements file or pyproject INSIDE `app/supportdesk` (strands-agents, bedrock-agentcore). Check what `agentcore build` expects.
+  The modules use flat imports (`from agent import ...`), which works only when `app/supportdesk` is the code root. Keep it that way.
+- Replace `payload["customer_id"]` in `main.py` with the verified JWT claim (runtime authorizer CUSTOM_JWT with the new Cognito pool). Never trust the payload in production.
+- Implement `gateway_backend` to call the AgentCore Gateway (MCP tools) and add the Cedar policy that compares the customer id with the token.
+- Decide whether to add session memory, and a guard that blocks `cancel_order` unless the customer confirmed.
+
 ## Working rules learned (user is cost-sensitive; chat 2 spent about 4 USD with little output)
 - Do not re-verify facts already written in this file. Do not scaffold scratch projects to explore. Batch work, write files, then test.
-- Still explain EVERY command in plain words BEFORE running it, including test runs.
+- NEW WORKFLOW (agreed with the user, replaces "run commands yourself"): the assistant does NOT run shell commands.
+  For each step: (1) explain in plain words what the command does and why, (2) give the exact command in a fenced code block
+  so the user can copy and run it in Git Bash, (3) wait for the user to paste the output, then continue.
+  File edits by the assistant are still fine. The user wants to learn what is happening. This stays in force until the user says otherwise.
 - Keep chats short: start a new chat after each phase or step.
 
 ## New-chat starter prompt

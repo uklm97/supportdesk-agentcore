@@ -5,6 +5,8 @@ description = "SupportDesk customer support agent on AWS (local Python code and 
 requires-python = ">=3.12"
 dependencies = [
     "boto3>=1.35",
+    "strands-agents>=1.0",
+    "bedrock-agentcore>=1.0",
 ]
 
 [dependency-groups]
@@ -14,5 +16,5 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-pythonpath = ["lambdas/orders"]
+pythonpath = ["lambdas/orders", "app/supportdesk"]
 testpaths = ["tests"]
