@@ -41,8 +41,24 @@ It must be deployable, so we can deploy, test, destroy, and redeploy cleanly. It
 - Memory strategies: SEMANTIC, SUMMARIZATION, USER_PREFERENCE, EPISODIC. Event expiry is 3 to 365 days.
 - Run `agentcore validate` after every edit to the JSON files.
 
+## Phase 0 findings (2026-10-26, read-only; nothing deployed)
+- User decision: use the latest AgentCore CLI. All code we write (Strands agent, tool Lambdas, tests, scripts) is Python.
+  The CLI-generated `agentcore/cdk/` stays TypeScript and is not hand-edited. Language of `infra/` is still OPEN (ask the user).
+- Global CLI was upgraded 0.31.1 -> 1.0.0 (`npm install -g @aws/agentcore@latest`). Re-check any 0.31.1 facts above against 1.0.0.
+- 1.0.0 has no `validate` command (the "run `agentcore validate`" rule above is out of date for 1.0.0).
+- 1.0.0 treats this project as a v0 project in compatibility mode. `agentcore migrate` is a dry run unless `--yes` is passed.
+  Its plan (agentcore/.cli/migrate/plan-*.md) changes 11 files in `agentcore/` (agentcore.json and the generated cdk files). NOT applied yet.
+- Deploy: `agentcore deploy [--target] [--yes]`. In 1.0.0 `--dry-run` and `--diff` no longer exist. The stack name is `AgentCore-<project>-<target>`.
+  The default target is created automatically on first deploy from the AWS account and region.
+- Destroy: there is no `destroy` command. Teardown is `agentcore remove all --yes` (or remove resources), then `agentcore deploy --yes`.
+  In 1.0.0 `--yes` on deploy confirms removing the target's stack when the project declares nothing to deploy.
+  NOT yet tested against real AWS. A leftover stack `AgentCore-IncidentInvestigator-default` is DELETE_COMPLETE, so that path worked once.
+- Outputs: our wrapper stack only adds `StackNameOutput`. The L3 library creates other CfnOutputs, and at least the ECR repo construct uses exportName.
+  Which outputs exist for runtime, gateway and memory is NOT verified. It needs `cdk synth` on a populated project, or a real deploy.
+- Not verified: whether `infra/` can read the agent outputs. Options: CloudFormation outputs by stack name, `agentcore status --json`, or SSM parameters.
+
 ## Next steps
-1. Phase 0 (remaining): verify how `agentcore deploy` and the destroy path work and whether `infra/` can read the agent's outputs.
+1. Phase 0 (remaining): decide on `agentcore migrate --yes`, decide the `infra/` language, then verify outputs by synthesizing a populated project (no deploy).
 2. Phase 1: tool Lambdas, DynamoDB table design, Strands agent, unit tests with a mocked model.
 3. Phase 2: Cedar policies, memory, gateway wiring, evaluators.
 4. Phase 3: `infra/` CDK app. Phase 4: React front end with Cognito login.
