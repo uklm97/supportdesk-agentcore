@@ -35,7 +35,7 @@ It must be deployable, so we can deploy, test, destroy, and redeploy cleanly. It
 - The Phase 0 migration changes are COMMITTED (commit 08245f6).
 - DONE (Phase 1, step 1 of 2): DynamoDB single-table design and tool logic, local only, 13 passing tests (`uv run pytest -q`). See "Phase 1 progress" below.
 - Phase 1 step 1 is COMMITTED (commit d37e591).
-- DONE (Phase 1, step 2 of 2): Strands agent under `app/supportdesk/`, 26 passing tests total. NOT YET COMMITTED (user commits). See "Phase 1 step 2 progress" below.
+- DONE (Phase 1, step 2 of 2): Strands agent under `app/supportdesk/`, 26 passing tests total. COMMITTED (commit 6f77697, committed by the user). See "Phase 1 step 2 progress" below.
 - NOT STARTED: runtime registration in agentcore.json, policies, memory, gateway wiring, evaluators, `infra/`, front end, scripts.
 
 ## Schema facts (confirmed against the 0.31.1 .llm-context; RE-CHECK against 1.0.0 before relying on them)
