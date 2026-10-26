@@ -1,0 +1,18 @@
+[project]
+name = "supportdesk"
+version = "0.1.0"
+description = "SupportDesk customer support agent on AWS (local Python code and tests)"
+requires-python = ">=3.12"
+dependencies = [
+    "boto3>=1.35",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "moto[dynamodb]>=5.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["lambdas/orders"]
+testpaths = ["tests"]

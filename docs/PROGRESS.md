@@ -32,8 +32,10 @@ It must be deployable, so we can deploy, test, destroy, and redeploy cleanly. It
 - DONE: the throwaway `starteragent` hello-world scaffold was deleted.
 - DONE (Phase 0): CLI upgraded to 1.0.0, project migrated to v1 format, `agentcore build` works. See "Phase 0 findings" below.
 - NOTHING is deployed to AWS. `agentcore/aws-targets.json` has no targets yet.
-- The migration changes are UNCOMMITTED in git (11 files under agentcore/). Commit them at the start of the next chat after a quick `git status` check.
-- NOT STARTED: agent code, tools, policies, memory, evaluators, `infra/`, front end, tests, scripts.
+- The Phase 0 migration changes are COMMITTED (commit 08245f6).
+- DONE (Phase 1, step 1 of 2): DynamoDB single-table design and tool logic, local only, 13 passing tests (`uv run pytest -q`). See "Phase 1 progress" below.
+- Phase 1 step 1 files are UNCOMMITTED unless `git log` shows a "Phase 1 step 1" commit. Run `git status` first.
+- NOT STARTED: Strands agent (`app/`), policies, memory, evaluators, `infra/`, front end, scripts.
 
 ## Schema facts (confirmed against the 0.31.1 .llm-context; RE-CHECK against 1.0.0 before relying on them)
 - Project name: letters and digits only, max 23 characters. Renaming a resource destroys and recreates it.
@@ -87,12 +89,35 @@ Plain-language version of this section: docs/PHASE0-EXPLAINED.md
 
 ## Next steps
 1. Phase 0: DONE except the real-deploy checks above. Those will be folded into Phase 6 (deploy, test, destroy, redeploy) so we do not pay for a throwaway deploy.
-2. Phase 1 (NEXT): tool Lambdas, DynamoDB table design, Strands agent, unit tests with a mocked model. All Python. Local only, no deploy.
-   Start by committing the Phase 0 migration changes, and by re-reading `agentcore add runtime --help` for 1.0.0.
+2. Phase 1 (IN PROGRESS, step 2 of 2 is NEXT): step 1 (DynamoDB design, tool logic, Lambda handler, tests) is done.
+   Remaining: the Strands agent under `app/` (system prompt, tools that call the order functions, unit tests with a mocked model),
+   then update this file and write docs/PHASE1-EXPLAINED.md. All Python. Local only, no deploy.
+   Agent code location: `agentcore add runtime` has no template option, and the Strands template exists only in `agentcore create --template agent-python-strands`.
+   Either write the agent files by hand (preferred, no exploration needed) or scaffold a scratch project outside this repo and copy the pattern.
+   `agentcore add runtime --help` was already read (1.0.0): flags include --name, --language, --protocol, --authorizer-type, --authorizer-configuration, --environment-variables, --additional-policies.
    Also create docs/PHASE1-EXPLAINED.md in plain language when the phase ends.
 3. Phase 2: Cedar policies, memory, gateway wiring, evaluators.
 4. Phase 3: `infra/` CDK app. Phase 4: React front end with Cognito login.
 5. Phase 5: lint, type checks, tests, `cdk synth`, cost estimate, user approval. Phase 6: deploy, test, destroy, redeploy.
+
+## Phase 1 progress (step 1 done)
+- Files: `pyproject.toml` (Python 3.12 via uv, boto3; dev: pytest, moto), `.python-version`, `.gitignore`,
+  `lambdas/orders/orders_core.py` (get_order, list_orders, cancel_order, create_ticket), `lambdas/orders/handler.py`, `tests/test_orders.py`.
+- DynamoDB: one pay-per-request table. `PK = CUSTOMER#<id>`, `SK = ORDER#<id>` or `TICKET#<id>`. Order fields: status, created_at, total_cents, items.
+  Statuses used: PLACED, PROCESSING, SHIPPED, CANCELLED. Tickets start OPEN.
+- Cancel is allowed only from PLACED or PROCESSING, enforced by a DynamoDB ConditionExpression (race-safe).
+- Business errors are returned as data: `{"error": CODE, "message": ...}` with codes NOT_FOUND, NOT_CANCELLABLE, INVALID_INPUT, UNKNOWN_TOOL.
+- The Lambda reads the table name from env var `ORDERS_TABLE`.
+- Tests run in about 8 seconds with moto, no AWS calls: `cd supportdesk; uv run pytest -q`.
+- ASSUMPTION to verify in Phase 2: the gateway passes tool args as the Lambda event and the tool name in
+  `context.client_context.custom["bedrockAgentCoreToolName"]`, prefixed `<target>___`. `handler.py` handles both prefixed and bare names.
+- ASSUMPTION: the code trusts the `customer_id` argument. Phase 2 must add a Cedar policy comparing it to the logged-in user (JWT claim).
+- Known stale doc: `AGENTS.md` still mentions `agentcore validate` (does not exist in 1.0.0). Use `agentcore build`.
+
+## Working rules learned (user is cost-sensitive; chat 2 spent about 4 USD with little output)
+- Do not re-verify facts already written in this file. Do not scaffold scratch projects to explore. Batch work, write files, then test.
+- Still explain EVERY command in plain words BEFORE running it, including test runs.
+- Keep chats short: start a new chat after each phase or step.
 
 ## New-chat starter prompt
 "Read C:\Users\AI_Dev\projects\agentcore-projects\supportdesk\docs\PROGRESS.md and continue with the next unfinished phase.
