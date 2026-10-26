@@ -22,7 +22,7 @@ It must be deployable, so we can deploy, test, destroy, and redeploy cleanly. It
 ## Environment (verified 2026-10-26)
 - Windows laptop, VS Code with Cline. User wants commands run through Git Bash: `& 'C:\Program Files\Git\bin\bash.exe' -c '<cmd>'`.
   Keep bash commands simple: nested quotes and `for` loops break when passed through PowerShell.
-- `agentcore` CLI 0.31.1, Node 24, npm 11, uv 0.12, Python 3.14, Docker 29, AWS CLI 2.36. `cdk` is not installed globally (use npx).
+- `agentcore` CLI 1.0.0 (upgraded from 0.31.1 in Phase 0), Node 24, npm 11, uv 0.12, Python 3.14, Docker 29, AWS CLI 2.36. `cdk` is not installed globally (use npx).
 - AWS: account <ACCOUNT_ID>, region us-east-1, CDK already bootstrapped (CDKToolkit stack exists).
 - An unrelated Cognito pool `CustomerSupportGatewayPool` already exists in the account. Do not modify it. Create a new pool.
 - The sibling folders `C:\Users\AI_Dev\projects\undercover` and `dice-roll-api` are unrelated to this project.
@@ -30,40 +30,71 @@ It must be deployable, so we can deploy, test, destroy, and redeploy cleanly. It
 ## State
 - DONE: empty AgentCore project shell created with `agentcore create --name supportdesk --no-agent` (config files + CDK folder, git repo).
 - DONE: the throwaway `starteragent` hello-world scaffold was deleted.
+- DONE (Phase 0): CLI upgraded to 1.0.0, project migrated to v1 format, `agentcore build` works. See "Phase 0 findings" below.
 - NOTHING is deployed to AWS. `agentcore/aws-targets.json` has no targets yet.
+- The migration changes are UNCOMMITTED in git (11 files under agentcore/). Commit them at the start of the next chat after a quick `git status` check.
 - NOT STARTED: agent code, tools, policies, memory, evaluators, `infra/`, front end, tests, scripts.
 
-## Schema facts already confirmed (from agentcore/.llm-context/agentcore.ts)
+## Schema facts (confirmed against the 0.31.1 .llm-context; RE-CHECK against 1.0.0 before relying on them)
 - Project name: letters and digits only, max 23 characters. Renaming a resource destroys and recreates it.
 - Runtime authorizer: AWS_IAM or CUSTOM_JWT. Gateway authorizer: NONE, AWS_IAM or CUSTOM_JWT.
 - Gateway Lambda targets use `compute` with host Lambda and an `implementation` binding, plus `toolDefinitions`.
 - Gateway can attach a policy engine with mode LOG_ONLY or ENFORCE. Policies are Cedar.
 - Memory strategies: SEMANTIC, SUMMARIZATION, USER_PREFERENCE, EPISODIC. Event expiry is 3 to 365 days.
-- Run `agentcore validate` after every edit to the JSON files.
+- `agentcore validate` does NOT exist in 1.0.0. Run `agentcore build` after every edit to the JSON files instead.
 
 ## Phase 0 findings (2026-10-26, read-only; nothing deployed)
-- User decision: use the latest AgentCore CLI. All code we write (Strands agent, tool Lambdas, tests, scripts) is Python.
-  The CLI-generated `agentcore/cdk/` stays TypeScript and is not hand-edited. Language of `infra/` is still OPEN (ask the user).
-- Global CLI was upgraded 0.31.1 -> 1.0.0 (`npm install -g @aws/agentcore@latest`). Re-check any 0.31.1 facts above against 1.0.0.
-- 1.0.0 has no `validate` command (the "run `agentcore validate`" rule above is out of date for 1.0.0).
-- 1.0.0 treats this project as a v0 project in compatibility mode. `agentcore migrate` is a dry run unless `--yes` is passed.
-  Its plan (agentcore/.cli/migrate/plan-*.md) changes 11 files in `agentcore/` (agentcore.json and the generated cdk files). NOT applied yet.
-- Deploy: `agentcore deploy [--target] [--yes]`. In 1.0.0 `--dry-run` and `--diff` no longer exist. The stack name is `AgentCore-<project>-<target>`.
-  The default target is created automatically on first deploy from the AWS account and region.
-- Destroy: there is no `destroy` command. Teardown is `agentcore remove all --yes` (or remove resources), then `agentcore deploy --yes`.
-  In 1.0.0 `--yes` on deploy confirms removing the target's stack when the project declares nothing to deploy.
-  NOT yet tested against real AWS. A leftover stack `AgentCore-IncidentInvestigator-default` is DELETE_COMPLETE, so that path worked once.
-- Outputs: our wrapper stack only adds `StackNameOutput`. The L3 library creates other CfnOutputs, and at least the ECR repo construct uses exportName.
-  Which outputs exist for runtime, gateway and memory is NOT verified. It needs `cdk synth` on a populated project, or a real deploy.
-- Not verified: whether `infra/` can read the agent outputs. Options: CloudFormation outputs by stack name, `agentcore status --json`, or SSM parameters.
+Plain-language version of this section: docs/PHASE0-EXPLAINED.md
+
+### User decisions made in Phase 0
+- Use the latest AgentCore CLI (now 1.0.0). All code we write is Python: Strands agent, tool Lambdas, tests, scripts, and `infra/` (Python CDK).
+- The CLI-generated `agentcore/cdk/` is TypeScript. Leave it TypeScript and do not hand-edit it. It is generated plumbing, not our code.
+- The user may have leftover resources from earlier projects in the AWS account. Do not reuse or touch them. Create new ones with new names.
+- Before running ANY command, tell the user in plain words what it does and why. Explain, do not just chain commands.
+- The user wants everything documented so they can read it later. Keep docs/PHASE0-EXPLAINED.md style notes for each phase.
+
+### What was done (nothing deployed, no AWS resources created or changed)
+- Upgraded the global CLI 0.31.1 -> 1.0.0 (`npm install -g @aws/agentcore@latest`).
+- Ran `agentcore migrate --yes`: the project is now v1 format (agentcore.json `version: 2`, `migratedFrom: "v1"`). Nothing was deployed, so no names had to be kept.
+  The 11 changed files are listed in agentcore/.cli/migrate/result-*.md. Migration removed jest/prettier from the generated CDK app and its sample test.
+- Ran `agentcore build` on the empty project: it works and synthesizes an empty `cdk.out`. This is not a real test of outputs.
+
+### CLI 1.0.0 facts (verified from `--help` and from the library source in agentcore/cdk/node_modules)
+- There is no `validate` command in 1.0.0. The old "run `agentcore validate`" rule is dead. Use `agentcore build` to check the project.
+- `agentcore deploy [--target <name>] [--yes]`. No `--dry-run` or `--diff` anymore. Preview with `agentcore build`, then `npx cdk diff` inside agentcore/cdk.
+  The stack is named `AgentCore-<project>-<target>`. The `default` target is created automatically on first deploy from your account and region.
+- There is no `destroy` command. Teardown path: `agentcore remove all --yes`, then `agentcore deploy --yes`.
+  On deploy, `--yes` confirms removing the stack when the project declares nothing. This is NOT yet tested against real AWS.
+  Evidence it works: a stack from an older project, `AgentCore-IncidentInvestigator-default`, shows DELETE_COMPLETE.
+- Other commands now: build, status, logs, traces, invoke, export, migrate, remove, plus resource groups (harness, runtime, gateway, identity, memory, eval, payment).
+  `agentcore add` can add: harness, runtime, runtime-endpoint, gateway, gateway-target, gateway-connector, policy-engine, policy, credentials, memory, evaluator, online-eval, config-bundle, payment-manager, payment-connector.
+  `agentcore create --template` has `agent-python-strands` and `empty` (the one we used). 1.0.0 also adds "harness" (config-defined agents, no code).
+- The generated CDK app is now two small files (bin/cdk.ts, lib/cdk-stack.ts). `lib/cdk-stack.ts` is meant to be extended with our own resources.
+  That is another way to add DynamoDB etc. We chose a separate `infra/` instead. Keep that choice unless a problem shows up.
+
+### Stack outputs (read from @aws/agentcore-cdk 1.0.0 source; not yet seen in a real deployed stack)
+- Every output is also a CloudFormation EXPORT named `<StackName>-<...>`. Runtime: RuntimeId, RuntimeArn, RoleArn (plus Endpoint Id/Arn).
+  Gateway: Id, Arn, Url, and target Ids. Memory: Id, Arn, MemoryIds, MemoryNames. Also evaluators, online evals, policy engines, policies, tool Lambda Arn/Name.
+- Consequence: `infra/` can read these. But if `infra/` uses CloudFormation Fn::ImportValue on an export, CloudFormation blocks deleting or changing that export
+  while `infra/` still uses it. Decision: `infra/` must NOT use ImportValue. A Python script reads the outputs with
+  `aws cloudformation describe-stacks` and passes them to the `infra/` CDK app as CDK context or SSM parameters.
+- Open question for the real deploy: output logical IDs end in "Output" and may include the runtime name. Confirm exact names after the first deploy.
+
+### Still unverified (needs a real deploy, so needs your approval and a cost estimate)
+- That teardown (`remove all` then `deploy --yes`) deletes everything cleanly, and that redeploy then works.
+- The exact output names in a deployed stack.
+- Whether `.llm-context/*.ts` (written by the 0.31.1 CLI) still matches the 1.0.0 schema. Re-read it, and check `agentcore build` errors, when adding resources.
 
 ## Next steps
-1. Phase 0 (remaining): decide on `agentcore migrate --yes`, decide the `infra/` language, then verify outputs by synthesizing a populated project (no deploy).
-2. Phase 1: tool Lambdas, DynamoDB table design, Strands agent, unit tests with a mocked model.
+1. Phase 0: DONE except the real-deploy checks above. Those will be folded into Phase 6 (deploy, test, destroy, redeploy) so we do not pay for a throwaway deploy.
+2. Phase 1 (NEXT): tool Lambdas, DynamoDB table design, Strands agent, unit tests with a mocked model. All Python. Local only, no deploy.
+   Start by committing the Phase 0 migration changes, and by re-reading `agentcore add runtime --help` for 1.0.0.
+   Also create docs/PHASE1-EXPLAINED.md in plain language when the phase ends.
 3. Phase 2: Cedar policies, memory, gateway wiring, evaluators.
 4. Phase 3: `infra/` CDK app. Phase 4: React front end with Cognito login.
 5. Phase 5: lint, type checks, tests, `cdk synth`, cost estimate, user approval. Phase 6: deploy, test, destroy, redeploy.
 
 ## New-chat starter prompt
 "Read C:\Users\AI_Dev\projects\agentcore-projects\supportdesk\docs\PROGRESS.md and continue with the next unfinished phase.
-Use Git Bash for commands, pause after the phase to explain, and do not deploy without my approval."
+Use Git Bash for commands, explain what each command does before running it, pause after the phase to explain,
+and do not deploy without my approval."
