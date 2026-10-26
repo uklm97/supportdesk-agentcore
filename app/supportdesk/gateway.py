@@ -11,7 +11,8 @@ MCPClient API. Confirm in Phase 6.
 from __future__ import annotations
 
 import json
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any, cast
 
 from strands.tools.mcp import MCPClient
 
@@ -20,10 +21,9 @@ TARGET_SEPARATOR = "___"
 
 
 def _transport_factory(url: str, token: str) -> Callable[[], Any]:
-    try:  # the function was renamed in newer versions of the mcp package
-        from mcp.client.streamable_http import streamablehttp_client as connect
-    except ImportError:  # pragma: no cover
-        from mcp.client.streamable_http import streamable_http_client as connect  # type: ignore[no-redef]
+    # pyproject.toml pins mcp<2. In 1.x this function accepts `headers`; the newer
+    # `streamable_http_client` does not, and mcp 2.x removed this one.
+    from mcp.client.streamable_http import streamablehttp_client as connect
 
     return lambda: connect(url, headers={"Authorization": f"Bearer {token}"})
 
@@ -57,6 +57,6 @@ def make_gateway_backend(
         qualified = f"{TARGET_NAME}{TARGET_SEPARATOR}{tool_name}"
         with factory() as client:
             result = client.call_tool_sync(tool_use_id=f"{tool_name}-call", name=qualified, arguments=args)
-        return parse_tool_result(result)
+        return parse_tool_result(cast(dict[str, Any], result))
 
     return backend

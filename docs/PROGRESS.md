@@ -39,10 +39,12 @@ It must be deployable, so we can deploy, test, destroy, and redeploy cleanly. It
 - DONE (Phase 2, local only): runtime, memory, gateway + Lambda target, Cedar policy, evaluators and online eval are written into agentcore.json; `main.py` now reads the customer from the JWT and calls the gateway.
   User ran `uv run pytest -q`: 41 passed. User ran `agentcore build`: OK (schema accepted, including the REPLACE_* placeholders and `requestHeaderAllowlist`). See "Phase 2 progress" below.
   Phase 2 is NOT yet committed (ask the user to commit). `agentcore build` only checks the schema locally: the Cedar policy, evaluators and everything else are still unvalidated by AWS until a deploy.
-- Phase 2 is NOT yet committed (see above); ask the user to commit it BEFORE Phase 3 changes are mixed in.
+- Phase 2 files were already committed before the Phase 3 commit (git status showed no Phase 2 changes pending).
 - DONE (Phase 3, local only): `infra/` Python CDK app (auth stack + app stack), chat Lambda, `scripts/configure_agentcore.py`, `scripts/seed.py`, tests.
-  User ran `uv run pytest -q`: 85 passed. User ran `npx cdk synth supportdesk-auth --quiet` in `infra/`: OK (app stack correctly skipped, inputs missing). NOT committed yet. See "Phase 3 progress" at the end of this file.
-- NOT STARTED: front end (Phase 4).
+  User ran `uv run pytest -q`: 85 passed. User ran `npx cdk synth supportdesk-auth --quiet` in `infra/`: OK (app stack correctly skipped, inputs missing). COMMITTED by the user (commit 13bc3b9, 22 files). See "Phase 3 progress" at the end of this file.
+- DONE (Phase 4, local only): React + TypeScript + Vite front end in `web/` with Cognito login and a chat screen; `scripts/write_web_config.py`. NOT yet committed. See "Phase 4 progress" at the end of this file.
+- DONE (Phase 5, local only; nothing deployed): lint, mypy, audits, `cdk synth supportdesk-app`, cost estimate. NOT yet committed. See "Phase 5 progress" near the end of this file and docs/PHASE5-EXPLAINED.md.
+- NEXT: Phase 6 (commit, user approves cost estimate, deploy, test, destroy, redeploy).
 
 ## Schema facts (confirmed against the 0.31.1 .llm-context; RE-CHECK against 1.0.0 before relying on them)
 - Project name: letters and digits only, max 23 characters. Renaming a resource destroys and recreates it.
@@ -209,17 +211,83 @@ Plain-language version of this section: docs/PHASE0-EXPLAINED.md
 - `test_reset_puts_the_placeholders_back` expects the committed agentcore.json to hold the REPLACE_* placeholders. After running the configure script for real, run it with `--reset` before committing/testing.
 - The AppStack budget covers the whole account, not only this project. The alert email must be confirmed by clicking the SNS and Budgets emails.
 - Deploy order when the time comes: `supportdesk-auth` -> configure script -> `agentcore deploy` -> configure script with `--runtime-arn` -> `supportdesk-app` -> seed script. Teardown in reverse.
-- Process slip in this chat: one read-only directory listing was run by the assistant, against the no-shell-commands rule. Nothing was changed by it.
+- Note: in this chat the assistant ran one read-only directory listing against the then-current rule; the user has since changed the rule so the assistant runs commands (see LATEST WORKFLOW).
+
+## Phase 4 progress (DONE locally; nothing deployed; plain-language version: docs/PHASE4-EXPLAINED.md)
+### Files (all under `web/` unless noted)
+- `package.json`, `tsconfig.json` (strict), `vite.config.ts` (port 5173 strict = the origin the API CORS rule allows; `global` defined for the Cognito library; vitest config), `index.html`.
+- `src/config.ts` (reads `/config.json` at run time, `parseConfig` validates), `src/auth.ts` (amazon-cognito-identity-js: SRP sign-in, restore/refresh session, sign out; handles NEW_PASSWORD_REQUIRED with a plain error),
+  `src/api.ts` (`sendChat`: POST `<apiUrl>/chat` with `Authorization: Bearer <ACCESS token>`, body `{prompt, session_id?}`, never a customer id; 401 -> "sign in again"),
+  `src/App.tsx`, `src/Login.tsx`, `src/Chat.tsx`, `src/main.tsx`, `src/styles.css`.
+- Tests: `src/config.test.ts`, `src/api.test.ts` (8 vitest tests). `tests/test_write_web_config.py` (3 pytest tests).
+- `scripts/write_web_config.py`: reads `supportdesk-auth` (UserPoolId, UserPoolClientId) and `supportdesk-app` (ApiUrl) outputs, writes `web/public/config.json` (git-ignored). Read-only toward AWS. `--api-url` and `--dry-run` flags.
+- `.gitignore`: `web/node_modules/`, `web/dist/`, `web/public/config.json`.
+- Installed: react 19, react-dom 19, amazon-cognito-identity-js 6, vite 8, vitest 5, typescript 7, @vitejs/plugin-react 6.
+### Verified locally
+- `npm run typecheck` clean, `npm test` 8 passed, `npm run build` OK (JS 313 kB, 96 kB gzip), `uv run pytest -q` 88 passed.
+### Open items / UNVERIFIED
+- Nothing renders in a browser yet and there are no component tests (login/chat screens were only type-checked and built). Needs a manual check against the real deployment.
+- The front end uses the ACCESS token. Whether API Gateway's JWT authorizer accepts it is still unverified (see Phase 3 open items).
+- GAP: `infra/` does NOT upload `web/dist` to the site bucket (no BucketDeployment). Phase 6 plan: `npm run build`, write config, then `aws s3 sync web/dist s3://<SiteBucketName>` and a CloudFront invalidation (both change AWS: need approval). Or add a BucketDeployment to app_stack (adds a helper Lambda; decide in Phase 5).
+- `config.json` must be uploaded with the site too (it lives in `web/public/`, so `vite build` copies it into `dist/`). Write it BEFORE building.
+- Demo users are created with a permanent password by `scripts/seed.py`, so no new-password challenge is needed. Sign-in uses the email address.
+- Local run (after deploy): write config, then `cd web; npm run dev` and open http://localhost:5173 (allowed by the API CORS rule).
+- The npm install printed no audit; `--no-audit` was used, so dependency vulnerabilities have not been checked. Consider `npm audit` in Phase 5.
+
+## Phase 5 progress (DONE locally; nothing deployed; details and cost table: docs/PHASE5-EXPLAINED.md)
+- Checks now passing: `uv run pytest -q` 92 passed; `uvx ruff check app lambdas infra/app.py infra/supportdesk_infra scripts tests` clean (config in pyproject `[tool.ruff]`);
+  mypy clean (`MYPYPATH=lambdas/orders:lambdas/chat:app/supportdesk:infra:scripts uv run --with mypy mypy --ignore-missing-imports --explicit-package-bases lambdas app infra/app.py infra/supportdesk_infra scripts`);
+  `pip-audit` clean; `web/` typecheck, 8 tests, build and `npm audit` clean; `agentcore build` OK; `npx cdk synth supportdesk-app` OK with example inputs passed as `-c` flags and `-o` to a temp folder.
+- Fixes: `mcp` pinned `>=1.30,<2` (CVE in 2.1.1; strands caps mcp below 2.2); `gateway.py` uses `streamablehttp_client` (accepts `headers`); API stage throttle 5 rps / burst 10 in `app_stack.py` (+ test).
+- Synth summary of the app stack: table PAY_PER_REQUEST (DESTROY), private S3 + CloudFront PriceClass_100, chat Lambda python3.12 256 MB 29 s with 7-day log group, JWT-protected `POST /chat`, monthly budget 20 USD.
+- DECIDED: the site is uploaded with `scripts/deploy_web.py` (`aws s3 sync` + CloudFront invalidation, `--dry-run` available), not a BucketDeployment. It changes AWS: run only in Phase 6 with approval. 3 tests.
+- Verified read-only: Bedrock inference profile `us.anthropic.claude-haiku-4-5-20251001-v1:0` is ACTIVE in us-east-1. Invocation permission for this account is still UNVERIFIED.
+- Left alone: `npm audit` high finding (`brace-expansion`) in generated `agentcore/cdk` (build-time only); a 731-day log group in the generated agentcore template (find out after deploy).
+- Cost estimate: about 2 to 5 USD for one deploy-test-destroy day, mostly Bedrock. Prices are from memory, not checked today. User has NOT yet approved a deploy.
+- Phase 6 prerequisites: user commits; alert email for `infra/inputs.json`; model access check; approval. Run `configure_agentcore.py --reset` before committing after a real configure run.
 
 ## Working rules learned (user is cost-sensitive; chat 2 spent about 4 USD with little output)
 - Do not re-verify facts already written in this file. Do not scaffold scratch projects to explore. Batch work, write files, then test.
-- NEW WORKFLOW (agreed with the user, replaces "run commands yourself"): the assistant does NOT run shell commands.
+- LATEST WORKFLOW (user, end of Phase 3, overrides everything below about who runs commands): THE ASSISTANT RUNS THE COMMANDS ITSELF (through Git Bash) and shows the user the result. Still explain in one plain sentence what each command does before running it. The assistant must still NEVER deploy or run anything that creates, changes or deletes AWS resources without the user's explicit approval and a cost estimate first. The 4 lines below describe the OLDER "user runs commands" workflow and are SUPERSEDED:
+- OLD WORKFLOW (superseded): the assistant does NOT run shell commands.
   For each step: (1) explain in plain words what the command does and why, (2) give the exact command in a fenced code block
   so the user can copy and run it in Git Bash, (3) wait for the user to paste the output, then continue.
   File edits by the assistant are still fine. The user wants to learn what is happening. This stays in force until the user says otherwise.
 - Keep chats short: start a new chat after each phase or step.
+- COST LESSONS from Phase 3 (the user had spent about 14 USD in total by then):
+  - NEVER search or read inside `agentcore/cdk/cdk.out/`, `agentcore/cdk/node_modules/`, `.venv/`, `infra/cdk.out/` or `uv.lock`. They hold huge single-line files. Search only inside `app/`, `lambdas/`, `infra/supportdesk_infra/`, `scripts/`, `tests/`, `docs/`.
+  - Read PROGRESS.md ONCE (use start_line/end_line if it is truncated). Do not re-read it. Do not run wide regex searches like `PK|SK`.
+  - Keep each editor call under 6000 characters. Split big files up front (the editor rejects larger ones and the text then has to be sent twice).
+  - SUPERSEDED: the user now WANTS the assistant to run commands (see LATEST WORKFLOW). Keep command output small (pipe through `tail -n 30` or `head -n 40`, use `-q` flags) because every output line is re-billed on every later turn.
+  - Phase 4 should be small: write the front end files, then run `npm install` and the build yourself (quiet flags, short output).
+  - The cost the user is talking about is the CLAUDE API cost of the chats (not AWS). Biggest levers: one phase per chat, no searches in generated folders, no repeated file reads, short command output.
 
-## New-chat starter prompt
+## USER DECISIONS after Phase 5 (2026-10-27)
+- WAF stays OFF (`enable_waf` false). The user does not want to spend anything extra: this is a learning project.
+- The "100 chat turns" in the cost estimate was only a sizing assumption. Test with about 10 to 20 turns (about 0.15 to 0.30 USD of model calls).
+- The user has already spent about 20 USD on chat costs: keep Phase 6 chats short, no re-reading files, tiny command output, deploy one stack at a time.
+
+## New-chat starter prompt (PHASE 6 version, use this one)
+"Read C:\Users\AI_Dev\projects\agentcore-projects\supportdesk\docs\PROGRESS.md once (it is long: read the State section and the Phase 5 progress section first, then only what you need) and continue with Phase 6 (deploy, test, destroy).
+YOU run the commands yourself in Git Bash. Before each one, say in one plain sentence what it does. Keep command output short.
+Before EACH command that creates, changes or deletes AWS resources, tell me the cost and wait for my yes. WAF stays off. Deploy one stack at a time in the order from PROGRESS.md.
+Do not search inside cdk.out, node_modules, .venv or uv.lock. Keep every file edit under 6000 characters. Pause after the phase to explain.
+My alert email is: <PUT YOUR EMAIL HERE>"
+
+## Phase 5 starter prompt (superseded)
+"Read C:\Users\AI_Dev\projects\agentcore-projects\supportdesk\docs\PROGRESS.md once and continue with Phase 5 (quality checks and pre-deploy review: lint, type checks, npm audit, `cdk synth` of the app stack, cost estimate).
+YOU run the commands yourself in Git Bash (not me). Before each one, say in one plain sentence what it does. Keep command output short. Never run anything that changes AWS (deploy, create, delete) without my approval and a cost estimate.
+You may edit files directly. Do not search inside cdk.out, node_modules, .venv or uv.lock. Do not re-verify facts already in PROGRESS.md. Keep every file edit under 6000 characters.
+Pause after the phase to explain. Do not deploy anything without my approval and a cost estimate."
+Phase 5 should also settle the open item from Phase 4: how the built site gets into the S3 bucket (`aws s3 sync` vs a BucketDeployment).
+
+## Phase 4 starter prompt (superseded)
+"Read C:\Users\AI_Dev\projects\agentcore-projects\supportdesk\docs\PROGRESS.md once and continue with Phase 4 (React front end with Cognito login).
+YOU run the commands yourself in Git Bash (not me). Before each one, say in one plain sentence what it does. Keep command output short. Never run anything that changes AWS (deploy, create, delete) without my approval and a cost estimate.
+You may edit files directly. Do not search inside cdk.out, node_modules, .venv or uv.lock. Do not re-verify facts already in PROGRESS.md. Keep every file edit under 6000 characters.
+Pause after the phase to explain. Do not deploy anything without my approval and a cost estimate."
+
+## Older starter prompt
 "Read C:\Users\AI_Dev\projects\agentcore-projects\supportdesk\docs\PROGRESS.md and continue with the next unfinished phase.
 Use Git Bash for commands, explain what each command does before running it, pause after the phase to explain,
 and do not deploy without my approval."

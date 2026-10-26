@@ -3,7 +3,6 @@
 import json
 
 import aws_cdk as cdk
-import pytest
 from aws_cdk.assertions import Match, Template
 
 from supportdesk_infra.app_stack import AppStack
@@ -50,6 +49,13 @@ def test_auth_resources_are_destroyed_with_the_stack():
     t = synth_auth()
     for resource in t.find_resources("AWS::Cognito::UserPool").values():
         assert resource["DeletionPolicy"] == "Delete"
+
+
+def test_chat_api_stage_is_throttled_to_cap_cost():
+    synth_app().has_resource_properties(
+        "AWS::ApiGatewayV2::Stage",
+        {"DefaultRouteSettings": {"ThrottlingRateLimit": 5, "ThrottlingBurstLimit": 10}},
+    )
 
 
 def test_table_is_pay_per_request_with_the_name_the_gateway_expects():

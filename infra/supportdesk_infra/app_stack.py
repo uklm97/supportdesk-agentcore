@@ -36,6 +36,10 @@ ORDERS_TABLE_NAME = "supportdesk-orders"
 
 LOCAL_DEV_ORIGIN = "http://localhost:5173"  # Vite dev server (Phase 4)
 
+# Requests per second allowed on the whole chat API (a demo needs far less than this).
+CHAT_RATE_LIMIT = 5
+CHAT_BURST_LIMIT = 10
+
 
 class AppStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, *, settings: Settings, **kwargs) -> None:
@@ -115,6 +119,16 @@ class AppStack(Stack):
             integration=integrations.HttpLambdaIntegration("ChatIntegration", chat_function),
             # An access token carries a `client_id` claim; API Gateway compares it with this list.
             authorizer=authorizers.HttpJwtAuthorizer("CognitoJwt", issuer, jwt_audience=[settings.client_id]),
+        )
+
+        # Cost guard: every chat call can trigger a Bedrock model call, so cap the request rate.
+        default_stage = api.default_stage
+        assert default_stage is not None  # created by default
+        stage_resource = default_stage.node.default_child
+        assert isinstance(stage_resource, apigwv2.CfnStage)
+        stage_resource.default_route_settings = apigwv2.CfnStage.RouteSettingsProperty(
+            throttling_rate_limit=CHAT_RATE_LIMIT,
+            throttling_burst_limit=CHAT_BURST_LIMIT,
         )
 
         guardrails.add_alarms(self, chat_function, api, settings.alert_email)

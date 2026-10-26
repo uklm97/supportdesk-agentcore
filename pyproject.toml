@@ -7,6 +7,8 @@ dependencies = [
     "boto3>=1.35",
     "strands-agents>=1.0",
     "bedrock-agentcore>=1.0",
+    # strands-agents caps mcp below 2.2; 2.1.1 has CVE-2026-59951 (fixed in 1.30.0 and 2.2.0).
+    "mcp>=1.30,<2",
 ]
 
 [dependency-groups]
@@ -21,6 +23,15 @@ infra = [
 
 [tool.uv]
 default-groups = ["dev", "infra"]
+
+[tool.ruff]
+line-length = 140
+target-version = "py312"
+src = ["lambdas/orders", "lambdas/chat", "app/supportdesk", "infra", "scripts"]
+extend-exclude = ["agentcore/cdk", "web", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 pythonpath = ["lambdas/orders", "lambdas/chat", "app/supportdesk", "infra", "scripts"]

@@ -3,4 +3,7 @@ __pycache__/
 .pytest_cache/
 infra/cdk.out/
 infra/inputs.json
+web/node_modules/
+web/dist/
+web/public/config.json
 *.pyc

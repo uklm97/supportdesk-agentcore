@@ -1,8 +1,9 @@
 import functools
 
+from fake_model import FakeModel, text, tool_call
+
 import handler
 from agent import build_agent
-from fake_model import FakeModel, text, tool_call
 from main import run
 from prompts import SYSTEM_PROMPT
 

@@ -9,9 +9,10 @@ be deleted and redeployed in any order without "export is in use" errors.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 INPUTS_FILE = Path(__file__).resolve().parent.parent / "inputs.json"
 

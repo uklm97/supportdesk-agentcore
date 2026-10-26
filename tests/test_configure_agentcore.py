@@ -30,7 +30,7 @@ def test_only_the_authorizer_lines_change():
     new_text, _ = cfg.apply_to_text(text, "us-east-1", POOL, CLIENT)
     before, after = text.splitlines(), new_text.splitlines()
     assert len(before) == len(after)
-    assert sum(1 for a, b in zip(before, after) if a != b) <= 4
+    assert sum(1 for a, b in zip(before, after, strict=True) if a != b) <= 4
 
 
 def test_running_twice_with_a_new_pool_replaces_the_old_values():
