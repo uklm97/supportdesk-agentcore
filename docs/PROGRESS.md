@@ -300,3 +300,16 @@ and do not deploy without my approval."
 - Live test with alice: all 4 orders, statuses, dates and totals matched seed_data.py.
 - Rules 8 and 9 (order dates, no shipping promises) were added to app/supportdesk/prompts.py and deployed. Further notes are kept locally.
 
+
+## Phase 6 result (2026-10-27)
+- Deploy order confirmed on real AWS: `supportdesk-auth`, configure script, `agentcore deploy`, configure script with `--runtime-arn`, `supportdesk-app`, seed script, web upload.
+- Local scripts needed `uv add "botocore[crt]"` so that boto3 can read `aws login` credentials.
+- Teardown confirmed on real AWS, in reverse order:
+  1. `cd infra && npx cdk destroy supportdesk-app --force`
+  2. `agentcore remove all --yes`, then `agentcore deploy --yes` (removes the `AgentCore-supportdesk-default` stack), then `git checkout -- agentcore/agentcore.json agentcore/aws-targets.json` to restore the project files.
+  3. `cd infra && npx cdk destroy supportdesk-auth --force`
+- Not removed by the stacks: CloudWatch log groups (`/aws/lambda/supportdesk-*`, `/aws/bedrock-agentcore/...supportdesk...`). Delete them with the AWS CLI from PowerShell,
+  or from Git Bash with `MSYS_NO_PATHCONV=1` in front of the command (Git Bash rewrites names that start with `/`).
+- Repo is public at https://github.com/uklm97/supportdesk-agentcore. History was rewritten once to remove the AWS account id; the DynamoDB ARN in `agentcore.json` now uses `*` for the account.
+- Before the next deploy, check that the `*` account in that ARN is accepted. If it is rejected, put the real account id in locally and do not commit it.
+
