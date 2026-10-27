@@ -1,80 +1,146 @@
-# SupportDesk: a customer-support AI agent on Amazon Bedrock AgentCore
+# SupportDesk
 
-SupportDesk is a complete customer-support agent built on
-[Amazon Bedrock AgentCore](https://aws.amazon.com/bedrock/agentcore/). A signed-in customer chats with the agent
-to look at their orders, cancel an order that has not shipped, or open a support ticket.
+A customer-support AI agent built on **Amazon Bedrock AgentCore**. A signed-in customer chats with the agent to look up
+orders, cancel an order that has not shipped, or open a support ticket. The project covers the full stack around the
+model: identity, per-customer authorization, tool access, memory, evaluation, infrastructure as code and a web front end.
 
-The focus is the surrounding platform, not just the model: identity, authorization, memory, tools, evaluation,
-cost control and clean teardown.
+## Highlights
 
-## What it does
-
-- **Chat web app**: React + TypeScript + Vite, served from S3 behind CloudFront, with Cognito login.
-- **Agent**: a [Strands Agents](https://strandsagents.com/) agent running on AgentCore Runtime, using Claude Haiku 4.5 on Bedrock.
-- **Tools through a Gateway**: order lookup, order cancel and ticket creation are exposed over MCP by an AgentCore Gateway
-  and run in a Lambda function backed by a single DynamoDB table.
-- **Safety by design**:
-  - The customer id comes from the signed JWT, never from the chat text.
-  - A **Cedar policy** on the Gateway allows a tool call only when it is for the caller's own orders.
-  - The agent must ask for confirmation before it cancels anything.
-- **Memory**: AgentCore Memory keeps the conversation context across turns.
-- **Evaluation**: custom evaluators (reply accuracy, cancel confirmation) and an online evaluation config, created paused to avoid judge-call cost.
-- **Cost guard rails**: pay-per-request DynamoDB, CloudFront price class 100, API throttling, 7-day log retention, a monthly budget alert, WAF off by default.
+- **Agent runtime**: a [Strands Agents](https://strandsagents.com/) agent on AgentCore Runtime, using Claude Haiku 4.5 on Amazon Bedrock.
+- **Tools behind a Gateway**: `list_orders`, `get_order`, `cancel_order` and `create_ticket` are exposed over MCP by an AgentCore Gateway and implemented in a Lambda function on a single DynamoDB table.
+- **Authorization that does not trust the model**:
+  - Users sign in with Amazon Cognito. The Runtime and the chat API both validate the JWT.
+  - The customer id is read from the token's `sub` claim. It is never taken from the chat text.
+  - A **Cedar policy** on the Gateway permits a tool call only when its `customer_id` equals the caller's `sub`. Everything else is denied by default.
+- **Human-in-the-loop for changes**: the agent must name the order and receive a clear "yes" before it cancels anything.
+- **Memory**: AgentCore Memory keeps conversation context within a session.
+- **Evaluation**: two LLM-as-judge evaluators (`CancelConfirmation`, `ReplyAccuracy`) and an online evaluation config.
+- **Infrastructure as code**: the AgentCore resources are defined in `agentcore.json`. Cognito, API, site, table, alarms and budget are defined in a Python AWS CDK app.
+- **Tested**: about 90 pytest tests plus front-end tests, with ruff, mypy and dependency audits.
 
 ## Architecture
 
 ```
-Browser (React) --login--> Cognito
-   |  Bearer token
+Browser (React + TypeScript)
+   |  sign in                         |  static site
+   v                                  v
+Amazon Cognito               CloudFront --> private S3 bucket
+   |  JWT
    v
-CloudFront + S3 (site)      API Gateway (HTTP API, JWT authorizer)
-                                  |  POST /chat
-                                  v
-                            Chat Lambda ---> AgentCore Runtime (Strands agent, Claude Haiku 4.5)
-                                                    |  \
-                                                    |   AgentCore Memory
-                                                    v
-                                            AgentCore Gateway (MCP + Cedar policy)
-                                                    |
-                                                    v
-                                           Orders Lambda --> DynamoDB
+API Gateway (HTTP API, JWT authorizer)  POST /chat
+   |
+   v
+Chat Lambda  ---- Bearer token + session id ---->  AgentCore Runtime
+                                                    (Strands agent, Claude Haiku 4.5)
+                                                      |                  |
+                                                      v                  v
+                                              AgentCore Memory    AgentCore Gateway (MCP)
+                                                                         |  Cedar policy:
+                                                                         |  customer_id == token sub
+                                                                         v
+                                                                  Orders Lambda --> DynamoDB
 ```
 
-## Repository layout
+## Project structure
 
-| Path | What is in it |
+```
+supportdesk/
+├── agentcore/
+│   ├── agentcore.json          # Runtime, memory, gateway, Cedar policy, evaluators, online eval
+│   ├── aws-targets.json        # Deployment target (account + region)
+│   └── cdk/                    # CDK app generated by the AgentCore CLI
+├── app/supportdesk/            # The agent (deployed to AgentCore Runtime)
+│   ├── main.py                 # Entry point: reads the customer from the JWT, runs the agent
+│   ├── agent.py                # Strands agent setup
+│   ├── prompts.py              # System prompt and rules
+│   ├── tools.py                # Tool wrappers that call the Gateway
+│   ├── gateway.py              # MCP client for the Gateway (forwards the caller's token)
+│   └── identity.py             # JWT claim helpers
+├── lambdas/
+│   ├── orders/                 # Tool implementation behind the Gateway
+│   │   ├── handler.py
+│   │   └── orders_core.py      # Orders and tickets on a single DynamoDB table
+│   └── chat/chat_handler.py    # API Gateway to Runtime proxy (standard library only)
+├── infra/                      # Python AWS CDK app
+│   ├── app.py
+│   ├── inputs.example.json     # Inputs for the app stack
+│   └── supportdesk_infra/
+│       ├── auth_stack.py       # Cognito user pool, groups, app client
+│       ├── app_stack.py        # DynamoDB, S3 + CloudFront, chat Lambda, HTTP API
+│       ├── guardrails.py       # Alarms, monthly budget, optional WAF
+│       └── settings.py
+├── web/                        # React + TypeScript + Vite front end
+│   └── src/                    # Login.tsx, Chat.tsx, auth.ts, api.ts, config.ts
+├── scripts/
+│   ├── configure_agentcore.py  # Writes Cognito and runtime ids into the config
+│   ├── seed.py, seed_data.py   # Demo users and demo orders
+│   ├── write_web_config.py     # Writes the web config from stack outputs
+│   ├── deploy_web.py           # Uploads the site to S3 and invalidates CloudFront
+│   └── stack_outputs.py
+├── tests/                      # pytest suite (agent, tools, infra templates, scripts)
+└── docs/                       # Build log and a plain-language write-up per phase
+```
+
+## How a chat turn works
+
+1. The user signs in through Cognito and the browser receives a JWT.
+2. The browser calls `POST /chat` with the token. API Gateway validates it with a JWT authorizer.
+3. The chat Lambda forwards the same bearer token and a session id to the AgentCore Runtime, which validates it again.
+4. The agent reads the customer id from the token and calls tools through the Gateway, passing the caller's token along.
+5. The Gateway evaluates the Cedar policy. A call whose `customer_id` does not match the token's `sub` is denied.
+6. The orders Lambda reads or updates only items under that customer's partition key and returns the result.
+7. The agent answers in plain language. Cancellations require an explicit confirmation first.
+
+## Data model
+
+One DynamoDB table (`supportdesk-orders`, on-demand capacity):
+
+| Item | PK | SK |
+|---|---|---|
+| Order | `CUSTOMER#<customer_id>` | `ORDER#<order_id>` |
+| Ticket | `CUSTOMER#<customer_id>` | `TICKET#<ticket_id>` |
+
+Every operation takes a `customer_id` and only touches that customer's partition. Only orders with status `PLACED` or
+`PROCESSING` can be cancelled.
+
+## Tech stack
+
+| Area | Technology |
 |---|---|
-| `app/supportdesk/` | The agent: prompt, tools, gateway client, identity helpers, entry point |
-| `agentcore/` | AgentCore project config (`agentcore.json`) and the generated CDK app |
-| `lambdas/orders/`, `lambdas/chat/` | Tool Lambda and the chat proxy Lambda |
-| `infra/` | Python CDK: `supportdesk-auth` (Cognito) and `supportdesk-app` (API, site, table, alarms, budget) |
-| `web/` | The front end |
-| `scripts/` | `configure_agentcore.py`, `seed.py`, `write_web_config.py`, `deploy_web.py`, `stack_outputs.py` |
-| `tests/` | About 90 pytest tests (agent logic, tools, infra templates, scripts) |
-| `docs/` | `PROGRESS.md` (full build log) and a plain-language `PHASEn-EXPLAINED.md` per phase |
+| Agent | Strands Agents, Python 3.12, Claude Haiku 4.5 on Amazon Bedrock |
+| Platform | Amazon Bedrock AgentCore (Runtime, Gateway, Memory, Policy, Evaluations) |
+| Authorization | Amazon Cognito (JWT), Cedar policy |
+| Backend | AWS Lambda, API Gateway (HTTP API), DynamoDB |
+| Front end | React, TypeScript, Vite, hosted on S3 and CloudFront |
+| Infrastructure | AgentCore CLI and CDK, Python AWS CDK |
+| Quality | pytest, ruff, mypy, pip-audit, npm audit |
 
-## Run the tests (no AWS needed)
+## Getting started
+
+Prerequisites: Python 3.12 and [uv](https://docs.astral.sh/uv/), Node.js 20 or later, the AgentCore CLI, AWS credentials
+with the CDK bootstrapped, and Amazon Bedrock model access.
+
+Run the tests (no AWS account needed):
 
 ```bash
 uv sync
 uv run pytest -q
+cd web && npm install && npm test
 ```
 
-## Deploy (costs money; read first)
-
-Prerequisites: AWS credentials, CDK bootstrapped, [uv](https://docs.astral.sh/uv/), Node.js 20+, the AgentCore CLI and Bedrock model access.
-One deploy-test-destroy day cost roughly 2 to 5 USD in the estimate, mostly model calls. Deploy one stack at a time, in this order:
+Deploy, one stack at a time, in this order:
 
 1. `cd infra && npx cdk deploy supportdesk-auth`
-2. `uv run python scripts/configure_agentcore.py --user-pool-id <id> --client-id <id> --alert-email <you@example.com>`
+2. `uv run python scripts/configure_agentcore.py --user-pool-id <id> --client-id <id> --alert-email <email>`
 3. `agentcore deploy`
-4. Re-run the configure script with `--runtime-arn <arn>`
+4. Run the configure script again with `--runtime-arn <runtime arn>`
 5. `cd infra && npx cdk deploy supportdesk-app`
-6. `uv run python scripts/seed.py` (demo users and orders; the password is printed once)
+6. `uv run python scripts/seed.py` creates demo users and orders and prints a password once.
 7. `uv run python scripts/write_web_config.py`, then `cd web && npm run build`, then `uv run python scripts/deploy_web.py`
 
-Destroy in reverse order. Run `configure_agentcore.py --reset` before committing so no account-specific ids land in git.
+Tear down in the reverse order. Before committing, run `uv run python scripts/configure_agentcore.py --reset` so that no
+account-specific ids end up in git.
 
-## License
+## Further reading
 
-No license has been chosen yet.
+`docs/PROGRESS.md` is the full build log. The `docs/PHASEn-EXPLAINED.md` files describe each phase in plain language.
